@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ModuLab: Ultimate Modulation Workspace</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        body {
+            background-color: #020617; /* Slate 950 */
+            color: #e2e8f0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        canvas {
+            border-radius: 0.25rem;
+            background: #0f172a; /* Slate 900 */
+            image-rendering: pixelated; /* Crisp lines */
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569; 
+        }
+        .scope-grid {
+            background-image: linear-gradient(rgba(51, 65, 85, 0.3) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(51, 65, 85, 0.3) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo, useCallback } = React;
+        
+        // --- ICONS ---
+        const IconBase = ({ children, size = 18, className = "" }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>{children}</svg>
+        );
+        const Activity = (p) => <IconBase {...p}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" /></IconBase>;
+        const Radio = (p) => <IconBase {...p}><circle cx="12" cy="12" r="2" /><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14" /></IconBase>;
+        const Zap = (p) => <IconBase {...p}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></IconBase>;
+        const Grid = (p) => <IconBase {...p}><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="3" y1="15" x2="21" y2="15" /><line x1="9" y1="3" x2="9" y2="21" /><line x1="15" y1="3" x2="15" y2="21" /></IconBase>;
+        const ZoomIn = (p) => <IconBase {...p}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line x1="11" y1="8" x2="11" y2="14" /><line x1="8" y1="11" x2="14" y2="11" /></IconBase>;
+        const ZoomOut = (p) => <IconBase {...p}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line x1="8" y1="11" x2="14" y2="11" /></IconBase>;
+        const Download = (p) => <IconBase {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></IconBase>;
+        const ImageDown = (p) => <IconBase {...p}><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></IconBase>;
+
+        // --- DSP MATH UTILITIES ---
+        const PI = Math.PI;
+        const TWO_PI = 2 * PI;
+
+        const generateNoise = (amp) => {
+            const u = 1 - Math.random(); 
+            const v = Math.random();
+            return (Math.sqrt(-2.0 * Math.log(u)) * Math.cos(TWO_PI * v)) * amp;
+        };
+
+        const computeFFT = (signal) => {
+            const n = signal.length;
+            if (n === 0) return [];
+            const spectrum = [];
+            // Windowing (Hann)
+            const windowed = signal.map((s, i) => s * (0.5 * (1 - Math.cos(TWO_PI * i / (n - 1)))));
+            
+            // Simplified DFT for visualization
+            for(let k = 0; k < n/2; k += 2) {
+                let r = 0, i = 0;
+                for(let t = 0; t < n; t += 2) {
+                    const theta = -TWO_PI * k * t / n;
+                    r += windowed[t] * Math.cos(theta);
+                    i += windowed[t] * Math.sin(theta);
+                }
+                spectrum.push(Math.sqrt(r*r + i*i));
+            }
+            return spectrum;
+        };
+
+        // --- MODULATION SCHEME DATABASE ---
+        
+        // Helper to get bit/symbol from stream
+        const getBit = (stream, t, rate) => stream[Math.floor(t * rate) % stream.length];
+        
+        // Helper for M-ary symbols (combines n bits)
+        const getSymbol = (stream, t, rate, m) => {
+            const bitsPerSym = Math.log2(m);
+            const idx = Math.floor(t * rate) * bitsPerSym;
+            let val = 0;
+            for(let i=0; i<bitsPerSym; i++) {
+                val = (val << 1) | stream[(idx + i) % stream.length];
+            }
+            return val;
+        };
+
+        const getDiffBit = (stream, t, rate) => {
+            const idx = Math.floor(t * rate);
+            const curr = stream[idx % stream.length];
+            const prev = stream[(idx - 1 + stream.length) % stream.length];
+            return curr ^ prev; 
+        };
+
+        // Sigma-Delta Accumulator state for PDM
+        let sigmaDeltaError = 0;
+
+        const SCHEMES = [
+            // --- 1. BASIC ANALOG ---
+            { category: "Basic Analog", id: "AM", name: "Amplitude Modulation (AM)", 
+              params: { fc: 20, fm: 2, depth: 0.8 }, 
+              gen: (t, p, snr) => {
+                  const m = Math.cos(TWO_PI * p.fm * t);
+                  const c = Math.cos(TWO_PI * p.fc * t);
+                  const s = (1 + p.depth * m) * c;
+                  return { msg: m, carrier: c, out: s + generateNoise(snr), i: s, q: 0 };
+              }},
+             { category: "Basic Analog", id: "DSB-SC", name: "DSB-SC", 
+              params: { fc: 20, fm: 2 }, 
+              gen: (t, p, snr) => {
+                  const m = Math.cos(TWO_PI * p.fm * t);
+                  const c = Math.cos(TWO_PI * p.fc * t);
+                  const s = m * c;
+                  return { msg: m, carrier: c, out: s + generateNoise(snr), i: s, q: 0 };
+              }},
+            { category: "Basic Analog", id: "SSB", name: "SSB-SC (USB)", 
+              params: { fc: 20, fm: 2 }, 
+              gen: (t, p, snr) => {
+                  const m = Math.cos(TWO_PI * p.fm * t);
+                  const m_hat = Math.sin(TWO_PI * p.fm * t); 
+                  const s = m * Math.cos(TWO_PI * p.fc * t) - m_hat * Math.sin(TWO_PI * p.fc * t);
+                  return { msg: m, carrier: Math.cos(TWO_PI*p.fc*t), out: s + generateNoise(snr), i: s, q: m_hat };
+              }},
+            { category: "Basic Analog", id: "VSB", name: "Vestigial Sideband (VSB)", 
+              params: { fc: 20, fm: 2 }, 
+              gen: (t, p, snr) => {
+                  const m = Math.cos(TWO_PI * p.fm * t);
+                  const m_hat = Math.sin(TWO_PI * p.fm * t); 
+                  // VSB: Pass one sideband + a fraction (0.3) of the other
+                  const usb = m * Math.cos(TWO_PI * p.fc * t) - m_hat * Math.sin(TWO_PI * p.fc * t);
+                  const lsb = m * Math.cos(TWO_PI * p.fc * t) + m_hat * Math.sin(TWO_PI * p.fc * t);
+                  const s = usb + 0.3 * lsb;
+                  return { msg: m, carrier: Math.cos(TWO_PI*p.fc*t), out: s + generateNoise(snr), i: s, q: m_hat };
+              }},
+
+            // --- 2. ANGLE MODULATION (FM/PM) ---
+            { category: "Angle Modulation", id: "FM", name: "Frequency Modulation (FM)", 
+              params: { fc: 15, fm: 1, beta: 3 }, 
+              gen: (t, p, snr) => {
+                  const m = Math.cos(TWO_PI * p.fm * t);
+                  const intM = Math.sin(TWO_PI * p.fm * t); 
+                  const c = Math.cos(TWO_PI * p.fc * t); 
+                  const s = Math.cos(TWO_PI * p.fc * t + p.beta * intM);
+                  return { msg: m, carrier: c, out: s + generateNoise(snr), i: s, q: Math.sin(TWO_PI * p.fc * t + p.beta * intM) };
+              }},
+            { category: "Angle Modulation", id: "PM", name: "Phase Modulation (PM)", 
+              params: { fc: 15, fm: 1, kp: 3 }, 
+              gen: (t, p, snr) => {
+                  const m = Math.cos(TWO_PI * p.fm * t); // Message modulates phase directly
+                  const c = Math.cos(TWO_PI * p.fc * t); 
+                  const s = Math.cos(TWO_PI * p.fc * t + p.kp * m);
+                  return { msg: m, carrier: c, out: s + generateNoise(snr), i: s, q: 0 };
+              }},
+            { category: "Angle Modulation", id: "NBFM", name: "Narrowband FM (NBFM)", 
+              params: { fc: 15, fm: 1 }, 
+              gen: (t, p, snr) => {
+                  const beta = 0.5; // Low beta for Narrowband
+                  const m = Math.cos(TWO_PI * p.fm * t);
+                  const intM = Math.sin(TWO_PI * p.fm * t);
+                  const s = Math.cos(TWO_PI * p.fc * t + beta * intM);
+                  return { msg: m, carrier: Math.cos(TWO_PI*p.fc*t), out: s + generateNoise(snr), i: s, q: 0 };
+              }},
+             { category: "Angle Modulation", id: "WBFM", name: "Wideband FM (WBFM)", 
+              params: { fc: 25, fm: 0.5 }, 
+              gen: (t, p, snr) => {
+                  const beta = 8.0; // High beta for Wideband
+                  const m = Math.cos(TWO_PI * p.fm * t);
+                  const intM = Math.sin(TWO_PI * p.fm * t);
+                  const s = Math.cos(TWO_PI * p.fc * t + beta * intM);
+                  return { msg: m, carrier: Math.cos(TWO_PI*p.fc*t), out: s + generateNoise(snr), i: s, q: 0 };
+              }},
+
+            // --- 3. COMPLEX ANALOG ---
+            { category: "Complex Analog", id: "Armstrong", name: "Armstrong Indirect FM", 
+              params: { fc: 20, fm: 1 }, 
+              gen: (t, p, snr) => {
+                  // Method: Integrate message -> Phase Modulate Crystal Osc (NBFM) -> Multiply Freq (WBFM)
+                  const m = Math.cos(TWO_PI * p.fm * t);
+                  const integratedM = Math.sin(TWO_PI * p.fm * t); // Integral of cos is sin
+                  
+                  // Crystal Oscillator (NBFM stage)
+                  const crystalFc = p.fc / 4; 
+                  const nbfm = Math.cos(TWO_PI * crystalFc * t + 0.2 * integratedM);
+                  
+                  // Frequency Multiplier (x4 for vis) simulates WBFM output
+                  // cos(4 * (wt + phi))
+                  const s = Math.cos(TWO_PI * p.fc * t + 0.8 * integratedM);
+
+                  return { msg: m, carrier: integratedM, out: s + generateNoise(snr), i: s, q: 0 };
+              }},
+             { category: "Complex Analog", id: "MPX", name: "FM Stereo MPX", 
+              params: { fc: 30 }, 
+              gen: (t, p, snr) => {
+                  // L = 1kHz, R = 2kHz tones
+                  const L = 0.5 * Math.cos(TWO_PI * 1 * t);
+                  const R = 0.5 * Math.cos(TWO_PI * 2 * t);
+                  
+                  const sum = L + R;
+                  const diff = L - R;
+                  const pilot = 0.1 * Math.cos(TWO_PI * 4 * t); // 19kHz pilot (scaled to 4 for vis)
+                  const subcarrier = Math.cos(TWO_PI * 8 * t); // 38kHz subcarrier (scaled to 8)
+                  
+                  // Baseband MPX signal
+                  const mpx = sum + pilot + diff * subcarrier;
+                  
+                  // FM Modulate the MPX
+                  const s = Math.cos(TWO_PI * p.fc * t + 4 * mpx); // Integrating mpx roughly for FM
+                  
+                  return { msg: sum, carrier: mpx, out: s + generateNoise(snr), i: s, q: 0 };
+              }},
+
+
+            // --- 4. PULSE / PCM ---
+            { category: "Pulse/PCM", id: "PCM", name: "Pulse Code Modulation (PCM)", 
+              params: { fm: 1, fs: 10 }, 
+              gen: (t, p, snr) => {
+                  const m = Math.cos(TWO_PI * p.fm * t);
+                  const sampleIdx = Math.floor(t * p.fs);
+                  const sampleVal = Math.cos(TWO_PI * p.fm * (sampleIdx / p.fs));
+                  const level = Math.floor((sampleVal + 1) * 3.5); // 0-7
+                  const bitIdx = Math.floor((t * p.fs * 3) % 3); 
+                  const bit = (level >> (2-bitIdx)) & 1;
+                  const pulse = (t * p.fs) % 1 < 0.2 ? 1 : 0;
+                  const noisyBit = bit + generateNoise(snr);
+                  return { msg: m, carrier: pulse, out: noisyBit, i: bit, q: 0, isDig: true,
+                           checkError: () => (noisyBit > 0.5 ? 1 : 0) !== bit };
+              }},
+            { category: "Pulse/PCM", id: "PWM", name: "Pulse Width Modulation", 
+              params: { fm: 1, fs: 20 }, 
+              gen: (t, p, snr) => {
+                  const m = (Math.cos(TWO_PI * p.fm * t) + 1) / 2;
+                  const saw = (t * p.fs) % 1; 
+                  const s = m > saw ? 1 : -1;
+                  return { msg: m*2-1, carrier: saw*2-1, out: s + generateNoise(snr), i: s, q: 0 };
+              }},
+             { category: "Pulse/PCM", id: "PAM", name: "Pulse Amplitude Modulation", 
+              params: { fm: 1, fs: 15 }, 
+              gen: (t, p, snr) => {
+                  const m = Math.cos(TWO_PI * p.fm * t);
+                  const pulse = (Math.sin(TWO_PI * p.fs * t) > 0.9) ? 1 : 0; 
+                  const s = m * pulse;
+                  return { msg: m, carrier: pulse, out: s + generateNoise(snr), i: s, q: 0 };
+              }},
+            { category: "Pulse/PCM", id: "PDM", name: "Pulse Density Modulation (PDM)", 
+              params: { fm: 1, fs: 100 }, // High sample rate
+              gen: (t, p, snr) => {
+                  const m = Math.cos(TWO_PI * p.fm * t);
+                  // Sigma-Delta simulation
+                  // Error = Input - DAC_Output
+                  // Integrator += Error
+                  // Output = Integrator > 0 ? 1 : -1
+                  // This runs per animation frame, approximating discrete time steps
+                  
+                  // For stateless 'gen' function visual, we approximate PDM density
+                  // PDM density is probabalistic based on amplitude
+                  // Density d = (m + 1) / 2
+                  
+                  // Deterministic pseudo-random threshold for vis stability
+                  const d = (m + 1) / 2;
+                  // Use high freq carrier to interact with amplitude
+                  const threshold = Math.sin(TWO_PI * p.fs * t) * Math.sin(TWO_PI * p.fs * 0.7 * t); 
+                  const s = (d - 0.5) > threshold * 0.5 ? 1 : -1;
+
+                  return { msg: m, carrier: 0, out: s + generateNoise(snr), i: s, q: 0 };
+              }},
+
+            // --- 5. FSK FAMILY (Including MFSK) ---
+            { category: "FSK Family", id: "BFSK", name: "Binary FSK (BFSK)", 
+              params: { fc: 15, dev: 5, rate: 2 }, 
+              gen: (t, p, snr, bits) => {
+                  const b = getBit(bits, t, p.rate);
+                  const freq = b ? (p.fc + p.dev) : (p.fc - p.dev);
+                  const c1 = Math.cos(TWO_PI * (p.fc + p.dev) * t);
+                  const c2 = Math.cos(TWO_PI * (p.fc - p.dev) * t);
+                  const s = Math.cos(TWO_PI * freq * t);
+                  return { msg: b, carrier: c1*0.5 + c2*0.5, out: s + generateNoise(snr), i: b?1:-1, q: b?1:-1, isDig: true };
+              }},
+            { category: "FSK Family", id: "MFSK", name: "M-ary FSK (MFSK)", 
+              params: { fc: 10, rate: 1.5, m: 4, spacing: 5 }, 
+              gen: (t, p, snr, bits) => {
+                  const sym = getSymbol(bits, t, p.rate, p.m); // 0 to M-1
+                  const freq = p.fc + sym * p.spacing;
+                  const s = Math.cos(TWO_PI * freq * t);
+                  return { msg: sym, carrier: Math.cos(TWO_PI * freq * t), out: s + generateNoise(snr), i: 0, q: 0, isDig: true };
+              }},
+            { category: "FSK Family", id: "MSK", name: "Minimum Shift Keying (MSK)", 
+              params: { fc: 10, rate: 2 }, 
+              gen: (t, p, snr, bits) => {
+                  const b = getBit(bits, t, p.rate);
+                  const freq = p.fc + (b ? 0.5 : -0.5) * p.rate;
+                  const s = Math.cos(TWO_PI * freq * t);
+                  return { msg: b, carrier: b?1:-1, out: s + generateNoise(snr), i: Math.cos(PI*t*p.rate/2), q: Math.sin(PI*t*p.rate/2), isDig: true };
+              }},
+            { category: "FSK Family", id: "GMSK", name: "Gaussian MSK (GMSK)", 
+              params: { fc: 10, rate: 2 }, 
+              gen: (t, p, snr, bits) => {
+                  const b = getBit(bits, t, p.rate);
+                  const localT = (t * p.rate) % 1;
+                  const smoothBit = b ? (1 - Math.exp(-3*localT)) : Math.exp(-3*localT);
+                  const instFreq = p.fc + (smoothBit - 0.5) * p.rate; 
+                  const s = Math.cos(TWO_PI * instFreq * t);
+                  return { msg: b, carrier: smoothBit, out: s + generateNoise(snr), i: Math.cos(TWO_PI*instFreq*t), q: Math.sin(TWO_PI*instFreq*t), isDig: true };
+              }},
+
+            // --- 6. PSK FAMILY ---
+            { category: "PSK Family", id: "BPSK", name: "Binary PSK (BPSK)", 
+              params: { fc: 15, rate: 2 }, 
+              gen: (t, p, snr, bits) => {
+                  const b = getBit(bits, t, p.rate);
+                  const phase = b ? 0 : PI;
+                  const s = Math.cos(TWO_PI * p.fc * t + phase);
+                  const noisyI = (b?1:-1) + generateNoise(snr*2); // Constellation point
+                  return { msg: b, carrier: Math.cos(TWO_PI*p.fc*t), out: s + generateNoise(snr), i: noisyI, q: generateNoise(snr*2), isDig: true,
+                           checkError: () => (noisyI > 0 ? 1 : 0) !== b };
+              }},
+            { category: "PSK Family", id: "DPSK", name: "Differential PSK (DPSK)", 
+              params: { fc: 15, rate: 2 }, 
+              gen: (t, p, snr, bits) => {
+                  const diffBit = getDiffBit(bits, t, p.rate); 
+                  const phase = diffBit ? 0 : PI;
+                  const s = Math.cos(TWO_PI * p.fc * t + phase);
+                  return { msg: getBit(bits, t, p.rate), carrier: diffBit, out: s + generateNoise(snr), i: diffBit?1:-1, q: 0, isDig: true };
+              }},
+            { category: "PSK Family", id: "QPSK", name: "Quadrature PSK (QPSK)", 
+              params: { fc: 10, rate: 2 }, 
+              gen: (t, p, snr, bits) => {
+                  const idx = Math.floor(t * p.rate) * 2;
+                  const b1 = bits[idx % bits.length] ? 1 : -1;
+                  const b2 = bits[(idx+1) % bits.length] ? 1 : -1;
+                  const s = (b1 * Math.cos(TWO_PI * p.fc * t) - b2 * Math.sin(TWO_PI * p.fc * t)) * 0.707;
+                  const noisyI = b1 + generateNoise(snr*2);
+                  const noisyQ = b2 + generateNoise(snr*2);
+                  return { msg: b1, carrier: b2, out: s + generateNoise(snr), i: noisyI, q: noisyQ, isDig: true,
+                           checkError: () => (noisyI > 0 ? 1 : -1) !== b1 || (noisyQ > 0 ? 1 : -1) !== b2 };
+              }},
+            { category: "PSK Family", id: "OQPSK", name: "Offset QPSK (OQPSK)", 
+              params: { fc: 10, rate: 2 }, 
+              gen: (t, p, snr, bits) => {
+                  const idx = Math.floor(t * p.rate) * 2;
+                  const b1 = bits[idx % bits.length] ? 1 : -1; 
+                  const idxQ = Math.floor((t - 0.5/p.rate) * p.rate) * 2;
+                  const b2 = bits[(idxQ+1) % bits.length] ? 1 : -1; 
+                  const s = (b1 * Math.cos(TWO_PI * p.fc * t) - b2 * Math.sin(TWO_PI * p.fc * t)) * 0.707;
+                  return { msg: b1, carrier: b2, out: s + generateNoise(snr), i: b1+generateNoise(snr), q: b2+generateNoise(snr), isDig: true };
+              }},
+            { category: "PSK Family", id: "MPSK", name: "M-ary PSK (8-PSK)", 
+              params: { fc: 12, rate: 1.5, m: 8 }, 
+              gen: (t, p, snr, bits) => {
+                  const sym = getSymbol(bits, t, p.rate, p.m);
+                  const phase = (TWO_PI * sym) / p.m;
+                  const s = Math.cos(TWO_PI * p.fc * t + phase);
+                  return { msg: sym, carrier: Math.cos(phase), out: s + generateNoise(snr), i: Math.cos(phase)+generateNoise(snr), q: Math.sin(phase)+generateNoise(snr), isDig: true };
+              }},
+
+            // --- 7. ASK/QAM FAMILY ---
+            { category: "Amplitude/QAM", id: "ASK", name: "Binary ASK", 
+              params: { fc: 20, rate: 4 }, 
+              gen: (t, p, snr, bits) => {
+                  const b = getBit(bits, t, p.rate);
+                  const s = b * Math.cos(TWO_PI * p.fc * t);
+                  const noisyVal = b + generateNoise(snr*2);
+                  return { msg: b, carrier: Math.cos(TWO_PI*p.fc*t), out: s + generateNoise(snr), i: noisyVal, q: 0, isDig: true,
+                           checkError: () => (noisyVal > 0.5 ? 1 : 0) !== b };
+              }},
+            { category: "Amplitude/QAM", id: "MASK", name: "M-ary ASK (4-ASK)", 
+              params: { fc: 15, rate: 2, m: 4 }, 
+              gen: (t, p, snr, bits) => {
+                  const sym = getSymbol(bits, t, p.rate, p.m); // 0, 1, 2, 3
+                  const level = (sym * 2) - (p.m - 1);
+                  const s = level * Math.cos(TWO_PI * p.fc * t) * 0.2;
+                  return { msg: sym, carrier: level, out: s + generateNoise(snr), i: level/3, q: 0, isDig: true };
+              }},
+            { category: "Amplitude/QAM", id: "16QAM", name: "16-QAM", 
+              params: { fc: 10, rate: 2 }, 
+              gen: (t, p, snr, bits) => {
+                  const idx = Math.floor(t * p.rate) * 4;
+                  const getLvl = (h, l) => (h ? 1 : -1) * (l ? 3 : 1);
+                  const I = getLvl(bits[idx%bits.length], bits[(idx+1)%bits.length]);
+                  const Q = getLvl(bits[(idx+2)%bits.length], bits[(idx+3)%bits.length]);
+                  const s = (I * Math.cos(TWO_PI*p.fc*t) - Q * Math.sin(TWO_PI*p.fc*t)) * 0.2;
+                  const nI = I + generateNoise(snr*3);
+                  const nQ = Q + generateNoise(snr*3);
+                  return { msg: I, carrier: Q, out: s + generateNoise(snr), i: nI, q: nQ, isDig: true,
+                           checkError: () => {
+                               // Hard decision demod approx
+                               const dec = (v) => (v > 2 ? 3 : v > 0 ? 1 : v > -2 ? -1 : -3);
+                               return dec(nI) !== I || dec(nQ) !== Q;
+                           }};
+              }},
+            { category: "Amplitude/QAM", id: "64QAM", name: "64-QAM", 
+              params: { fc: 10, rate: 1.5 }, 
+              gen: (t, p, snr, bits) => {
+                  const idx = Math.floor(t * p.rate) * 6;
+                  const bitsToLvl = (b2,b1,b0) => ((b2*4 + b1*2 + b0) * 2 - 7);
+                  const I = bitsToLvl(bits[idx%bits.length], bits[(idx+1)%bits.length], bits[(idx+2)%bits.length]);
+                  const Q = bitsToLvl(bits[(idx+3)%bits.length], bits[(idx+4)%bits.length], bits[(idx+5)%bits.length]);
+                  const s = (I * Math.cos(TWO_PI*p.fc*t) - Q * Math.sin(TWO_PI*p.fc*t)) * 0.08;
+                  return { msg: I, carrier: Q, out: s + generateNoise(snr), i: I+generateNoise(snr*4), q: Q+generateNoise(snr*4), isDig: true };
+              }},
+
+            // --- 8. SPREAD / MULTICARRIER ---
+            { category: "Spread/OFDM", id: "DSSS", name: "DSSS (Direct Sequence)", 
+              params: { fc: 15, rate: 1, chipRate: 10 }, 
+              gen: (t, p, snr, bits) => {
+                  const data = getBit(bits, t, p.rate) ? 1 : -1;
+                  const chip = Math.sin(TWO_PI * p.chipRate * t) > 0 ? 1 : -1;
+                  const spread = data * chip;
+                  const s = spread * Math.cos(TWO_PI * p.fc * t);
+                  return { msg: data, carrier: chip, out: s + generateNoise(snr), i: spread, q: 0, isDig: true };
+              }},
+             { category: "Spread/OFDM", id: "FHSS", name: "FHSS (Freq Hopping)", 
+              params: { fc: 10, rate: 2, hopRate: 0.5 }, 
+              gen: (t, p, snr, bits) => {
+                  const data = getBit(bits, t, p.rate) ? 1 : -1;
+                  const hopIdx = Math.floor(t * p.hopRate) % 4;
+                  const freqOffsets = [0, 5, -3, 8];
+                  const currentFc = p.fc + freqOffsets[hopIdx];
+                  const s = data * Math.cos(TWO_PI * currentFc * t);
+                  return { msg: data, carrier: currentFc/10, out: s + generateNoise(snr), i: data, q: 0, isDig: true };
+              }},
+            { category: "Spread/OFDM", id: "OFDM", name: "OFDM (4-Subcarrier)", 
+              params: { fc: 10, rate: 1 }, 
+              gen: (t, p, snr, bits) => {
+                  let s = 0;
+                  const symTime = Math.floor(t * p.rate);
+                  const subcarriers = 4;
+                  let iTotal = 0;
+                  for(let k=0; k<subcarriers; k++) {
+                      const idx = (symTime * subcarriers + k);
+                      const b = bits[idx % bits.length] ? 1 : -1;
+                      const freq = p.fc + k * 2; 
+                      s += b * Math.cos(TWO_PI * freq * t);
+                      if (k===0) iTotal = b; 
+                  }
+                  s = s / subcarriers;
+                  return { msg: (symTime%2), carrier: Math.cos(TWO_PI*p.fc*t), out: s + generateNoise(snr), i: iTotal + generateNoise(snr), q: generateNoise(snr), isDig: true };
+              }},
+
+            // --- 9. SPECIALIZED ---
+             { category: "Specialized", id: "Polar", name: "Polar Modulation", 
+              params: { fc: 15, rate: 2 }, 
+              gen: (t, p, snr, bits) => {
+                  const idx = Math.floor(t * p.rate);
+                  const amp = (bits[idx % bits.length] ? 1 : 0.5);
+                  const phase = (bits[(idx+1) % bits.length] ? 0 : PI/2);
+                  const s = amp * Math.cos(TWO_PI * p.fc * t + phase);
+                  return { msg: amp, carrier: phase, out: s + generateNoise(snr), i: amp*Math.cos(phase), q: amp*Math.sin(phase), isDig: true };
+              }},
+             { category: "Specialized", id: "OTFS", name: "OTFS (Delay-Doppler)", 
+              params: { fc: 12, rate: 1 }, 
+              gen: (t, p, snr, bits) => {
+                  const gridX = (t * 5) % 4; 
+                  const gridY = Math.sin(t * 2); 
+                  const s = Math.cos(TWO_PI * p.fc * t) * (gridX > 2 ? 1 : 0);
+                  const d = (t * p.rate) % 1;
+                  return { msg: gridX, carrier: gridY, out: s + generateNoise(snr), i: (d-0.5)*2 + generateNoise(snr), q: (Math.random()-0.5)*2, isDig: true };
+              }},
+        ];
+
+        // --- SCOPE VISUALIZER COMPONENT ---
+        const Scope = ({ data, color, label, height = 80, id }) => {
+            const canvasRef = useRef(null);
+            
+            // Allow download of this specific scope's view
+            const downloadImage = () => {
+                const link = document.createElement('a');
+                link.download = `modulab_scope_${id}.png`;
+                link.href = canvasRef.current.toDataURL();
+                link.click();
+            };
+
+            useEffect(() => {
+                const cvs = canvasRef.current;
+                const ctx = cvs.getContext('2d');
+                const w = cvs.width;
+                const h = cvs.height;
+                
+                ctx.clearRect(0, 0, w, h);
+                ctx.beginPath();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2;
+                
+                // Zero line
+                ctx.save();
+                ctx.strokeStyle = '#334155';
+                ctx.setLineDash([2, 4]);
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(0, h/2);
+                ctx.lineTo(w, h/2);
+                ctx.stroke();
+                ctx.restore();
+
+                // Signal
+                ctx.beginPath();
+                for(let i=0; i<data.length; i++) {
+                    const x = (i / data.length) * w;
+                    // Auto-scale or clip? Clipping for now to keep relative amp visible
+                    const val = Math.max(-1.5, Math.min(1.5, data[i]));
+                    const y = (h/2) - (val * (h * 0.35)); 
+                    if(i===0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+                
+            }, [data, color]);
+
+            return (
+                <div className="relative mb-2 group">
+                    <div className="absolute top-1 left-2 flex gap-2">
+                        <div className="text-xs font-bold px-2 py-0.5 rounded bg-slate-900/80 border border-slate-700 text-slate-300 pointer-events-none">
+                            {label}
+                        </div>
+                    </div>
+                    <button onClick={downloadImage} className="absolute top-1 right-2 p-1 bg-slate-800 text-slate-400 rounded opacity-0 group-hover:opacity-100 transition hover:bg-slate-700 hover:text-white" title="Save Image">
+                        <ImageDown size={14} />
+                    </button>
+                    <canvas ref={canvasRef} width={600} height={height} className="w-full scope-grid border border-slate-800" />
+                </div>
+            );
+        };
+
+        // --- MAIN APPLICATION ---
+
+        const App = () => {
+            const [activeId, setActiveId] = useState('AM');
+            const [snr, setSnr] = useState(0.02);
+            const [params, setParams] = useState({});
+            const [isRunning, setIsRunning] = useState(true);
+            const [timeScale, setTimeScale] = useState(1); // Zoom factor
+            
+            // BER State
+            const [berStats, setBerStats] = useState({ total: 0, errors: 0 });
+            
+            const timeRef = useRef(0);
+            const reqRef = useRef(0);
+            
+            // Data Buffers
+            const [bufferMsg, setBufferMsg] = useState([]);
+            const [bufferCarr, setBufferCarr] = useState([]);
+            const [bufferOut, setBufferOut] = useState([]);
+            const [constPoints, setConstPoints] = useState([]);
+            const [spectrum, setSpectrum] = useState([]);
+
+            const bits = useMemo(() => Array.from({length: 1024}, () => Math.round(Math.random())), []);
+            const scheme = useMemo(() => SCHEMES.find(s => s.id === activeId) || SCHEMES[0], [activeId]);
+
+            // Reset logic on scheme change
+            useEffect(() => {
+                setParams(scheme.params);
+                timeRef.current = 0;
+                setBerStats({ total: 0, errors: 0 });
+            }, [scheme]);
+
+            // Animation Loop
+            useEffect(() => {
+                if(!isRunning) return;
+
+                const loop = () => {
+                    const tStart = timeRef.current;
+                    const baseDt = 0.005; 
+                    const dt = baseDt / timeScale; // Zoom implementation
+                    const samples = 400; 
+                    
+                    const bM = [], bC = [], bO = [];
+                    const cP = [];
+                    let loopErrors = 0;
+                    let loopTotal = 0;
+                    
+                    for(let i=0; i<samples; i++) {
+                        const t = tStart + i * dt;
+                        const res = scheme.gen(t, params, snr, bits);
+                        
+                        bM.push(res.msg);
+                        bC.push(res.carrier);
+                        bO.push(res.out);
+                        
+                        // Constellation
+                        if (i % 5 === 0) cP.push({ i: res.i, q: res.q });
+
+                        // BER Calculation (Sample center check approximation)
+                        if (scheme.isDig && scheme.checkError && i % 20 === 0) {
+                            loopTotal++;
+                            if (res.checkError()) loopErrors++;
+                        }
+                    }
+                    
+                    setBufferMsg(bM);
+                    setBufferCarr(bC);
+                    setBufferOut(bO);
+                    setConstPoints(cP);
+                    setSpectrum(computeFFT(bO));
+                    
+                    // Update BER stats (accumulate)
+                    if (scheme.isDig) {
+                        setBerStats(prev => {
+                           // Keep running average but prevent overflow by resetting occasionally or decay?
+                           // Simple accumulation for this session:
+                           const newTotal = prev.total + loopTotal;
+                           const newErrors = prev.errors + loopErrors;
+                           // Reset if too large to keep numbers snappy
+                           if(newTotal > 10000) return { total: loopTotal, errors: loopErrors }; 
+                           return { total: newTotal, errors: newErrors };
+                        });
+                    }
+
+                    timeRef.current += dt * 5; 
+                    reqRef.current = requestAnimationFrame(loop);
+                };
+                reqRef.current = requestAnimationFrame(loop);
+                return () => cancelAnimationFrame(reqRef.current);
+            }, [activeId, params, snr, isRunning, scheme, timeScale]);
+
+            // Export Data as CSV
+            const exportCSV = () => {
+                let csvContent = "data:text/csv;charset=utf-8,Time,Message,Carrier,Output\n";
+                bufferMsg.forEach((row, index) => {
+                    csvContent += `${index},${bufferMsg[index]},${bufferCarr[index]},${bufferOut[index]}\n`;
+                });
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", `modulab_data_${activeId}.csv`);
+                document.body.appendChild(link);
+                link.click();
+            };
+
+            const categories = useMemo(() => {
+                const cats = {};
+                SCHEMES.forEach(s => {
+                    if(!cats[s.category]) cats[s.category] = [];
+                    cats[s.category].push(s);
+                });
+                return cats;
+            }, []);
+
+            const getCarrierLabel = (id) => {
+                if(id === 'Armstrong') return 'INTEGRATED MESSAGE';
+                if(id === 'MPX') return 'MULTIPLEXED BASEBAND';
+                if(id === 'PCM') return 'SAMPLING PULSES';
+                if(id === 'BFSK' || id === 'MFSK') return 'MULTI-TONE REFERENCE';
+                if(id === 'MSK' || id === 'GMSK') return 'PHASE SHAPE / FILTER';
+                if(id === 'OQPSK') return 'Q-CHANNEL (DELAYED)';
+                if(id === 'DPSK') return 'DIFFERENTIAL BIT';
+                if(id.includes('QAM') || id.includes('PSK')) return 'QUADRATURE (Q) STREAM';
+                if(id === 'PWM') return 'SAWTOOTH REF';
+                if(id.includes('Spread')) return 'SPREADING CODE';
+                return 'CARRIER REFERENCE';
+            };
+
+            return (
+                <div className="flex h-screen overflow-hidden text-sm select-none">
+                    {/* LEFT: SIDEBAR */}
+                    <div className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col overflow-hidden">
+                        <div className="p-4 border-b border-slate-800 bg-slate-900 z-10">
+                            <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-cyan-300 bg-clip-text text-transparent flex items-center gap-2">
+                                <Radio size={20} className="text-blue-400" /> ModuLab
+                            </h1>
+                            <p className="text-xs text-slate-500 mt-1">Comm Systems Visualizer</p>
+                        </div>
+                        
+                        <div className="flex-1 overflow-y-auto p-2 space-y-4">
+                            {Object.entries(categories).map(([cat, items]) => (
+                                <div key={cat}>
+                                    <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-2">{cat}</h3>
+                                    <div className="space-y-0.5">
+                                        {items.map(s => (
+                                            <button
+                                                key={s.id}
+                                                onClick={() => setActiveId(s.id)}
+                                                className={`w-full text-left px-3 py-2 rounded-md transition-all flex justify-between items-center group ${activeId === s.id ? 'bg-blue-600/20 text-blue-300 border border-blue-500/30' : 'hover:bg-slate-800 text-slate-400'}`}
+                                            >
+                                                <span>{s.name.split('(')[0]}</span>
+                                                {activeId === s.id && <div className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"></div>}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* RIGHT: MAIN */}
+                    <div className="flex-1 flex flex-col bg-slate-950 overflow-hidden relative">
+                        
+                        {/* TOP BAR: CONTROLS */}
+                        <div className="h-16 border-b border-slate-800 bg-slate-900/50 flex items-center px-6 justify-between backdrop-blur-sm z-20">
+                            <div className="flex items-center gap-6">
+                                <h2 className="text-lg font-semibold text-slate-200 w-32 truncate">{scheme.name}</h2>
+                                <div className="h-6 w-px bg-slate-700"></div>
+                                <div className="flex items-center gap-3">
+                                    <label className="text-xs font-bold text-slate-500">SNR</label>
+                                    <input type="range" min="0" max="0.3" step="0.001" 
+                                        value={snr} onChange={e => setSnr(parseFloat(e.target.value))}
+                                        className="w-24 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                    />
+                                    <span className={`text-xs font-mono px-2 py-0.5 rounded ${snr < 0.05 ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                                        {((1 - snr*3)*30).toFixed(1)} dB
+                                    </span>
+                                </div>
+                                <div className="flex items-center gap-4">
+                                     {Object.keys(params).map(k => (
+                                         <div key={k} className="flex flex-col">
+                                            <span className="text-[10px] text-slate-500 uppercase">{k}</span>
+                                            <input type="range" 
+                                                min={k.includes('fc') ? 5 : 0.1} max={k.includes('fc') ? 50 : 10} step={0.1}
+                                                value={params[k]} 
+                                                onChange={e => setParams({...params, [k]: parseFloat(e.target.value)})} 
+                                                className="w-20 h-1 bg-slate-700 rounded appearance-none cursor-pointer accent-cyan-500"
+                                            />
+                                         </div>
+                                     ))}
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button onClick={() => setIsRunning(!isRunning)} className={`px-4 py-1.5 rounded text-xs font-bold uppercase tracking-wide border transition-all ${isRunning ? 'border-red-500/50 text-red-400 hover:bg-red-500/10' : 'border-green-500/50 text-green-400 hover:bg-green-500/10'}`}>
+                                    {isRunning ? 'Pause' : 'Run'}
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* DASHBOARD GRID */}
+                        <div className="flex-1 overflow-y-auto p-6 grid grid-cols-12 gap-6">
+                            
+                            {/* LEFT COLUMN: WAVEFORMS (8 cols) */}
+                            <div className="col-span-12 lg:col-span-8 flex flex-col gap-4">
+                                <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 shadow-xl relative">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <div className="flex items-center gap-2 text-slate-400 text-xs font-bold uppercase tracking-wider">
+                                            <Activity size={16} /> Signal Scope
+                                        </div>
+                                        {/* TOOLBAR */}
+                                        <div className="flex items-center gap-1">
+                                            <button onClick={() => setTimeScale(Math.max(0.5, timeScale - 0.5))} className="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Zoom Out"><ZoomOut size={14}/></button>
+                                            <span className="text-[10px] text-slate-500 w-8 text-center">{timeScale}x</span>
+                                            <button onClick={() => setTimeScale(Math.min(5, timeScale + 0.5))} className="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Zoom In"><ZoomIn size={14}/></button>
+                                            <div className="w-px h-4 bg-slate-700 mx-1"></div>
+                                            <button onClick={exportCSV} className="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-blue-400 flex items-center gap-1" title="Export CSV">
+                                                <Download size={14} /> <span className="text-[10px]">Data</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    
+                                    <Scope id="msg" data={bufferMsg} color="#facc15" label={scheme.id==='PCM'?'INPUT (ANALOG)':'INPUT (MESSAGE/BITS)'} height={100} />
+                                    <Scope id="carr" data={bufferCarr} color="#94a3b8" label={getCarrierLabel(activeId)} height={80} />
+                                    <Scope id="out" data={bufferOut} color="#38bdf8" label="OUTPUT (MODULATED + NOISE)" height={120} />
+                                </div>
+                            </div>
+
+                            {/* RIGHT COLUMN: ANALYSIS (4 cols) */}
+                            <div className="col-span-12 lg:col-span-4 flex flex-col gap-4">
+                                
+                                {/* CONSTELLATION */}
+                                <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 shadow-xl flex flex-col items-center">
+                                    <div className="w-full flex items-center gap-2 mb-2 text-slate-400 text-xs font-bold uppercase tracking-wider">
+                                        <Grid size={16} /> Constellation (I/Q)
+                                    </div>
+                                    <div className="relative w-full aspect-square bg-slate-950 rounded border border-slate-800 overflow-hidden">
+                                        <canvas 
+                                            ref={node => {
+                                                if(node) {
+                                                    const ctx = node.getContext('2d');
+                                                    const w = node.width;
+                                                    const h = node.height;
+                                                    ctx.clearRect(0,0,w,h);
+                                                    
+                                                    ctx.strokeStyle = '#1e293b';
+                                                    ctx.beginPath();
+                                                    ctx.moveTo(w/2,0); ctx.lineTo(w/2,h);
+                                                    ctx.moveTo(0,h/2); ctx.lineTo(w,h/2);
+                                                    ctx.stroke();
+
+                                                    ctx.fillStyle = '#f472b6';
+                                                    constPoints.forEach(p => {
+                                                        const x = (w/2) + p.i * (w/3);
+                                                        const y = (h/2) - p.q * (h/3);
+                                                        ctx.fillRect(x, y, 2, 2);
+                                                    });
+                                                }
+                                            }}
+                                            width={300} height={300}
+                                            className="w-full h-full"
+                                        />
+                                        <div className="absolute top-2 right-2 text-[10px] text-slate-600 font-mono">Q</div>
+                                        <div className="absolute bottom-2 right-2 text-[10px] text-slate-600 font-mono">I</div>
+                                    </div>
+                                </div>
+
+                                {/* PSD (FFT) */}
+                                <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 shadow-xl flex-1 min-h-[160px]">
+                                    <div className="w-full flex items-center gap-2 mb-2 text-slate-400 text-xs font-bold uppercase tracking-wider">
+                                        <Zap size={16} /> Power Spectral Density
+                                    </div>
+                                    <div className="w-full h-32 bg-slate-950 rounded border border-slate-800 relative">
+                                        <canvas 
+                                            ref={node => {
+                                                if(node && spectrum.length > 0) {
+                                                    const ctx = node.getContext('2d');
+                                                    const w = node.width;
+                                                    const h = node.height;
+                                                    ctx.clearRect(0,0,w,h);
+                                                    
+                                                    // Grid
+                                                    ctx.strokeStyle = '#1e293b';
+                                                    ctx.beginPath();
+                                                    for(let x=0; x<w; x+=w/4) { ctx.moveTo(x,0); ctx.lineTo(x,h); }
+                                                    ctx.stroke();
+
+                                                    const barW = w / spectrum.length;
+                                                    ctx.fillStyle = '#818cf8';
+                                                    
+                                                    spectrum.forEach((val, i) => {
+                                                        const logVal = Math.log10(val + 1) * 10; // Log scaleish
+                                                        const barH = Math.min(h, logVal * (h/25));
+                                                        ctx.fillRect(i * barW, h - barH, barW+1, barH);
+                                                    });
+                                                }
+                                            }}
+                                            width={300} height={128}
+                                            className="w-full h-full"
+                                        />
+                                        <div className="absolute bottom-1 right-1 text-[8px] text-slate-600">freq &rarr;</div>
+                                    </div>
+                                </div>
+
+                                {/* BER CALCULATOR */}
+                                {scheme.isDig && (
+                                    <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 shadow-xl">
+                                        <div className="flex justify-between items-center mb-2">
+                                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Bit Error Rate</span>
+                                            <button onClick={() => setBerStats({total:0, errors:0})} className="text-[10px] text-blue-400 hover:underline">Reset</button>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div className="bg-slate-950 p-2 rounded border border-slate-800">
+                                                <div className="text-[10px] text-slate-500">BITS SIMULATED</div>
+                                                <div className="text-lg font-mono text-slate-200">{berStats.total}</div>
+                                            </div>
+                                            <div className="bg-slate-950 p-2 rounded border border-slate-800">
+                                                <div className="text-[10px] text-slate-500">ERROR %</div>
+                                                <div className={`text-lg font-mono ${berStats.errors > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                                    {berStats.total > 0 ? ((berStats.errors / berStats.total)*100).toFixed(2) : "0.00"}%
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
