@@ -66,6 +66,7 @@
         const ZoomOut = (p) => <IconBase {...p}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line x1="8" y1="11" x2="14" y2="11" /></IconBase>;
         const Download = (p) => <IconBase {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></IconBase>;
         const ImageDown = (p) => <IconBase {...p}><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></IconBase>;
+        const Edit = (p) => <IconBase {...p}><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></IconBase>;
 
         // --- DSP MATH UTILITIES ---
         const PI = Math.PI;
@@ -81,10 +82,7 @@
             const n = signal.length;
             if (n === 0) return [];
             const spectrum = [];
-            // Windowing (Hann)
             const windowed = signal.map((s, i) => s * (0.5 * (1 - Math.cos(TWO_PI * i / (n - 1)))));
-            
-            // Simplified DFT for visualization
             for(let k = 0; k < n/2; k += 2) {
                 let r = 0, i = 0;
                 for(let t = 0; t < n; t += 2) {
@@ -97,12 +95,9 @@
             return spectrum;
         };
 
-        // --- MODULATION SCHEME DATABASE ---
-        
-        // Helper to get bit/symbol from stream
+        // --- MODULATION SCHEME HELPER FUNCTIONS ---
         const getBit = (stream, t, rate) => stream[Math.floor(t * rate) % stream.length];
         
-        // Helper for M-ary symbols (combines n bits)
         const getSymbol = (stream, t, rate, m) => {
             const bitsPerSym = Math.log2(m);
             const idx = Math.floor(t * rate) * bitsPerSym;
@@ -120,9 +115,7 @@
             return curr ^ prev; 
         };
 
-        // Sigma-Delta Accumulator state for PDM
-        let sigmaDeltaError = 0;
-
+        // --- SCHEMES ---
         const SCHEMES = [
             // --- 1. BASIC ANALOG ---
             { category: "Basic Analog", id: "AM", name: "Amplitude Modulation (AM)", 
@@ -154,14 +147,13 @@
               gen: (t, p, snr) => {
                   const m = Math.cos(TWO_PI * p.fm * t);
                   const m_hat = Math.sin(TWO_PI * p.fm * t); 
-                  // VSB: Pass one sideband + a fraction (0.3) of the other
                   const usb = m * Math.cos(TWO_PI * p.fc * t) - m_hat * Math.sin(TWO_PI * p.fc * t);
                   const lsb = m * Math.cos(TWO_PI * p.fc * t) + m_hat * Math.sin(TWO_PI * p.fc * t);
                   const s = usb + 0.3 * lsb;
                   return { msg: m, carrier: Math.cos(TWO_PI*p.fc*t), out: s + generateNoise(snr), i: s, q: m_hat };
               }},
 
-            // --- 2. ANGLE MODULATION (FM/PM) ---
+            // --- 2. ANGLE MODULATION ---
             { category: "Angle Modulation", id: "FM", name: "Frequency Modulation (FM)", 
               params: { fc: 15, fm: 1, beta: 3 }, 
               gen: (t, p, snr) => {
@@ -174,7 +166,7 @@
             { category: "Angle Modulation", id: "PM", name: "Phase Modulation (PM)", 
               params: { fc: 15, fm: 1, kp: 3 }, 
               gen: (t, p, snr) => {
-                  const m = Math.cos(TWO_PI * p.fm * t); // Message modulates phase directly
+                  const m = Math.cos(TWO_PI * p.fm * t); 
                   const c = Math.cos(TWO_PI * p.fc * t); 
                   const s = Math.cos(TWO_PI * p.fc * t + p.kp * m);
                   return { msg: m, carrier: c, out: s + generateNoise(snr), i: s, q: 0 };
@@ -182,7 +174,7 @@
             { category: "Angle Modulation", id: "NBFM", name: "Narrowband FM (NBFM)", 
               params: { fc: 15, fm: 1 }, 
               gen: (t, p, snr) => {
-                  const beta = 0.5; // Low beta for Narrowband
+                  const beta = 0.5; 
                   const m = Math.cos(TWO_PI * p.fm * t);
                   const intM = Math.sin(TWO_PI * p.fm * t);
                   const s = Math.cos(TWO_PI * p.fc * t + beta * intM);
@@ -191,7 +183,7 @@
              { category: "Angle Modulation", id: "WBFM", name: "Wideband FM (WBFM)", 
               params: { fc: 25, fm: 0.5 }, 
               gen: (t, p, snr) => {
-                  const beta = 8.0; // High beta for Wideband
+                  const beta = 8.0;
                   const m = Math.cos(TWO_PI * p.fm * t);
                   const intM = Math.sin(TWO_PI * p.fm * t);
                   const s = Math.cos(TWO_PI * p.fc * t + beta * intM);
@@ -202,41 +194,24 @@
             { category: "Complex Analog", id: "Armstrong", name: "Armstrong Indirect FM", 
               params: { fc: 20, fm: 1 }, 
               gen: (t, p, snr) => {
-                  // Method: Integrate message -> Phase Modulate Crystal Osc (NBFM) -> Multiply Freq (WBFM)
                   const m = Math.cos(TWO_PI * p.fm * t);
-                  const integratedM = Math.sin(TWO_PI * p.fm * t); // Integral of cos is sin
-                  
-                  // Crystal Oscillator (NBFM stage)
-                  const crystalFc = p.fc / 4; 
-                  const nbfm = Math.cos(TWO_PI * crystalFc * t + 0.2 * integratedM);
-                  
-                  // Frequency Multiplier (x4 for vis) simulates WBFM output
-                  // cos(4 * (wt + phi))
+                  const integratedM = Math.sin(TWO_PI * p.fm * t);
                   const s = Math.cos(TWO_PI * p.fc * t + 0.8 * integratedM);
-
                   return { msg: m, carrier: integratedM, out: s + generateNoise(snr), i: s, q: 0 };
               }},
              { category: "Complex Analog", id: "MPX", name: "FM Stereo MPX", 
               params: { fc: 30 }, 
               gen: (t, p, snr) => {
-                  // L = 1kHz, R = 2kHz tones
                   const L = 0.5 * Math.cos(TWO_PI * 1 * t);
                   const R = 0.5 * Math.cos(TWO_PI * 2 * t);
-                  
                   const sum = L + R;
                   const diff = L - R;
-                  const pilot = 0.1 * Math.cos(TWO_PI * 4 * t); // 19kHz pilot (scaled to 4 for vis)
-                  const subcarrier = Math.cos(TWO_PI * 8 * t); // 38kHz subcarrier (scaled to 8)
-                  
-                  // Baseband MPX signal
+                  const pilot = 0.1 * Math.cos(TWO_PI * 4 * t); 
+                  const subcarrier = Math.cos(TWO_PI * 8 * t); 
                   const mpx = sum + pilot + diff * subcarrier;
-                  
-                  // FM Modulate the MPX
-                  const s = Math.cos(TWO_PI * p.fc * t + 4 * mpx); // Integrating mpx roughly for FM
-                  
+                  const s = Math.cos(TWO_PI * p.fc * t + 4 * mpx); 
                   return { msg: sum, carrier: mpx, out: s + generateNoise(snr), i: s, q: 0 };
               }},
-
 
             // --- 4. PULSE / PCM ---
             { category: "Pulse/PCM", id: "PCM", name: "Pulse Code Modulation (PCM)", 
@@ -245,7 +220,7 @@
                   const m = Math.cos(TWO_PI * p.fm * t);
                   const sampleIdx = Math.floor(t * p.fs);
                   const sampleVal = Math.cos(TWO_PI * p.fm * (sampleIdx / p.fs));
-                  const level = Math.floor((sampleVal + 1) * 3.5); // 0-7
+                  const level = Math.floor((sampleVal + 1) * 3.5); 
                   const bitIdx = Math.floor((t * p.fs * 3) % 3); 
                   const bit = (level >> (2-bitIdx)) & 1;
                   const pulse = (t * p.fs) % 1 < 0.2 ? 1 : 0;
@@ -270,29 +245,16 @@
                   return { msg: m, carrier: pulse, out: s + generateNoise(snr), i: s, q: 0 };
               }},
             { category: "Pulse/PCM", id: "PDM", name: "Pulse Density Modulation (PDM)", 
-              params: { fm: 1, fs: 100 }, // High sample rate
+              params: { fm: 1, fs: 100 }, 
               gen: (t, p, snr) => {
                   const m = Math.cos(TWO_PI * p.fm * t);
-                  // Sigma-Delta simulation
-                  // Error = Input - DAC_Output
-                  // Integrator += Error
-                  // Output = Integrator > 0 ? 1 : -1
-                  // This runs per animation frame, approximating discrete time steps
-                  
-                  // For stateless 'gen' function visual, we approximate PDM density
-                  // PDM density is probabalistic based on amplitude
-                  // Density d = (m + 1) / 2
-                  
-                  // Deterministic pseudo-random threshold for vis stability
-                  const d = (m + 1) / 2;
-                  // Use high freq carrier to interact with amplitude
                   const threshold = Math.sin(TWO_PI * p.fs * t) * Math.sin(TWO_PI * p.fs * 0.7 * t); 
+                  const d = (m + 1) / 2;
                   const s = (d - 0.5) > threshold * 0.5 ? 1 : -1;
-
                   return { msg: m, carrier: 0, out: s + generateNoise(snr), i: s, q: 0 };
               }},
 
-            // --- 5. FSK FAMILY (Including MFSK) ---
+            // --- 5. FSK FAMILY ---
             { category: "FSK Family", id: "BFSK", name: "Binary FSK (BFSK)", 
               params: { fc: 15, dev: 5, rate: 2 }, 
               gen: (t, p, snr, bits) => {
@@ -301,15 +263,20 @@
                   const c1 = Math.cos(TWO_PI * (p.fc + p.dev) * t);
                   const c2 = Math.cos(TWO_PI * (p.fc - p.dev) * t);
                   const s = Math.cos(TWO_PI * freq * t);
-                  return { msg: b, carrier: c1*0.5 + c2*0.5, out: s + generateNoise(snr), i: b?1:-1, q: b?1:-1, isDig: true };
+                  const ideal = b?1:-1;
+                  const noisyDecision = ideal + generateNoise(snr*2); // Decision var sim
+                  return { msg: b, carrier: c1*0.5 + c2*0.5, out: s + generateNoise(snr), i: b?1:-1, q: b?1:-1, isDig: true,
+                           checkError: () => (noisyDecision > 0 ? 1 : 0) !== b };
               }},
             { category: "FSK Family", id: "MFSK", name: "M-ary FSK (MFSK)", 
               params: { fc: 10, rate: 1.5, m: 4, spacing: 5 }, 
               gen: (t, p, snr, bits) => {
-                  const sym = getSymbol(bits, t, p.rate, p.m); // 0 to M-1
+                  const sym = getSymbol(bits, t, p.rate, p.m); 
                   const freq = p.fc + sym * p.spacing;
                   const s = Math.cos(TWO_PI * freq * t);
-                  return { msg: sym, carrier: Math.cos(TWO_PI * freq * t), out: s + generateNoise(snr), i: 0, q: 0, isDig: true };
+                  const noisySym = sym + Math.round(generateNoise(snr * 3)); // Sim noise on freq detection
+                  return { msg: sym, carrier: Math.cos(TWO_PI * freq * t), out: s + generateNoise(snr), i: 0, q: 0, isDig: true,
+                           checkError: () => Math.max(0, Math.min(p.m-1, noisySym)) !== sym };
               }},
             { category: "FSK Family", id: "MSK", name: "Minimum Shift Keying (MSK)", 
               params: { fc: 10, rate: 2 }, 
@@ -317,7 +284,9 @@
                   const b = getBit(bits, t, p.rate);
                   const freq = p.fc + (b ? 0.5 : -0.5) * p.rate;
                   const s = Math.cos(TWO_PI * freq * t);
-                  return { msg: b, carrier: b?1:-1, out: s + generateNoise(snr), i: Math.cos(PI*t*p.rate/2), q: Math.sin(PI*t*p.rate/2), isDig: true };
+                  const noisyDecision = (b?1:-1) + generateNoise(snr*2);
+                  return { msg: b, carrier: b?1:-1, out: s + generateNoise(snr), i: Math.cos(PI*t*p.rate/2), q: Math.sin(PI*t*p.rate/2), isDig: true,
+                           checkError: () => (noisyDecision > 0 ? 1 : 0) !== b };
               }},
             { category: "FSK Family", id: "GMSK", name: "Gaussian MSK (GMSK)", 
               params: { fc: 10, rate: 2 }, 
@@ -327,7 +296,9 @@
                   const smoothBit = b ? (1 - Math.exp(-3*localT)) : Math.exp(-3*localT);
                   const instFreq = p.fc + (smoothBit - 0.5) * p.rate; 
                   const s = Math.cos(TWO_PI * instFreq * t);
-                  return { msg: b, carrier: smoothBit, out: s + generateNoise(snr), i: Math.cos(TWO_PI*instFreq*t), q: Math.sin(TWO_PI*instFreq*t), isDig: true };
+                  const noisyDecision = (b?1:-1) + generateNoise(snr*2);
+                  return { msg: b, carrier: smoothBit, out: s + generateNoise(snr), i: Math.cos(TWO_PI*instFreq*t), q: Math.sin(TWO_PI*instFreq*t), isDig: true,
+                           checkError: () => (noisyDecision > 0 ? 1 : 0) !== b };
               }},
 
             // --- 6. PSK FAMILY ---
@@ -337,7 +308,7 @@
                   const b = getBit(bits, t, p.rate);
                   const phase = b ? 0 : PI;
                   const s = Math.cos(TWO_PI * p.fc * t + phase);
-                  const noisyI = (b?1:-1) + generateNoise(snr*2); // Constellation point
+                  const noisyI = (b?1:-1) + generateNoise(snr*2); 
                   return { msg: b, carrier: Math.cos(TWO_PI*p.fc*t), out: s + generateNoise(snr), i: noisyI, q: generateNoise(snr*2), isDig: true,
                            checkError: () => (noisyI > 0 ? 1 : 0) !== b };
               }},
@@ -347,7 +318,9 @@
                   const diffBit = getDiffBit(bits, t, p.rate); 
                   const phase = diffBit ? 0 : PI;
                   const s = Math.cos(TWO_PI * p.fc * t + phase);
-                  return { msg: getBit(bits, t, p.rate), carrier: diffBit, out: s + generateNoise(snr), i: diffBit?1:-1, q: 0, isDig: true };
+                  const noisyDiff = (diffBit?1:-1) + generateNoise(snr*2);
+                  return { msg: getBit(bits, t, p.rate), carrier: diffBit, out: s + generateNoise(snr), i: diffBit?1:-1, q: 0, isDig: true,
+                           checkError: () => (noisyDiff > 0 ? 1 : 0) !== diffBit };
               }},
             { category: "PSK Family", id: "QPSK", name: "Quadrature PSK (QPSK)", 
               params: { fc: 10, rate: 2 }, 
@@ -369,7 +342,10 @@
                   const idxQ = Math.floor((t - 0.5/p.rate) * p.rate) * 2;
                   const b2 = bits[(idxQ+1) % bits.length] ? 1 : -1; 
                   const s = (b1 * Math.cos(TWO_PI * p.fc * t) - b2 * Math.sin(TWO_PI * p.fc * t)) * 0.707;
-                  return { msg: b1, carrier: b2, out: s + generateNoise(snr), i: b1+generateNoise(snr), q: b2+generateNoise(snr), isDig: true };
+                  const noisyI = b1 + generateNoise(snr*2);
+                  const noisyQ = b2 + generateNoise(snr*2);
+                  return { msg: b1, carrier: b2, out: s + generateNoise(snr), i: noisyI, q: noisyQ, isDig: true,
+                            checkError: () => (noisyI > 0 ? 1 : -1) !== b1 || (noisyQ > 0 ? 1 : -1) !== b2 };
               }},
             { category: "PSK Family", id: "MPSK", name: "M-ary PSK (8-PSK)", 
               params: { fc: 12, rate: 1.5, m: 8 }, 
@@ -377,7 +353,14 @@
                   const sym = getSymbol(bits, t, p.rate, p.m);
                   const phase = (TWO_PI * sym) / p.m;
                   const s = Math.cos(TWO_PI * p.fc * t + phase);
-                  return { msg: sym, carrier: Math.cos(phase), out: s + generateNoise(snr), i: Math.cos(phase)+generateNoise(snr), q: Math.sin(phase)+generateNoise(snr), isDig: true };
+                  const nI = Math.cos(phase) + generateNoise(snr*2);
+                  const nQ = Math.sin(phase) + generateNoise(snr*2);
+                  // Demod phase
+                  const rxPhase = Math.atan2(nQ, nI);
+                  const normPhase = (rxPhase < 0 ? rxPhase + TWO_PI : rxPhase);
+                  const rxSym = Math.round(normPhase / (TWO_PI/p.m)) % p.m;
+                  return { msg: sym, carrier: Math.cos(phase), out: s + generateNoise(snr), i: nI, q: nQ, isDig: true,
+                           checkError: () => rxSym !== sym };
               }},
 
             // --- 7. ASK/QAM FAMILY ---
@@ -396,7 +379,11 @@
                   const sym = getSymbol(bits, t, p.rate, p.m); // 0, 1, 2, 3
                   const level = (sym * 2) - (p.m - 1);
                   const s = level * Math.cos(TWO_PI * p.fc * t) * 0.2;
-                  return { msg: sym, carrier: level, out: s + generateNoise(snr), i: level/3, q: 0, isDig: true };
+                  const noisyLvl = level + generateNoise(snr*5);
+                  // Demod: -3, -1, 1, 3
+                  const dec = (v) => (v > 2 ? 3 : v > 0 ? 1 : v > -2 ? -1 : -3);
+                  return { msg: sym, carrier: level, out: s + generateNoise(snr), i: level/3, q: 0, isDig: true,
+                           checkError: () => dec(noisyLvl) !== level };
               }},
             { category: "Amplitude/QAM", id: "16QAM", name: "16-QAM", 
               params: { fc: 10, rate: 2 }, 
@@ -410,7 +397,6 @@
                   const nQ = Q + generateNoise(snr*3);
                   return { msg: I, carrier: Q, out: s + generateNoise(snr), i: nI, q: nQ, isDig: true,
                            checkError: () => {
-                               // Hard decision demod approx
                                const dec = (v) => (v > 2 ? 3 : v > 0 ? 1 : v > -2 ? -1 : -3);
                                return dec(nI) !== I || dec(nQ) !== Q;
                            }};
@@ -423,7 +409,13 @@
                   const I = bitsToLvl(bits[idx%bits.length], bits[(idx+1)%bits.length], bits[(idx+2)%bits.length]);
                   const Q = bitsToLvl(bits[(idx+3)%bits.length], bits[(idx+4)%bits.length], bits[(idx+5)%bits.length]);
                   const s = (I * Math.cos(TWO_PI*p.fc*t) - Q * Math.sin(TWO_PI*p.fc*t)) * 0.08;
-                  return { msg: I, carrier: Q, out: s + generateNoise(snr), i: I+generateNoise(snr*4), q: Q+generateNoise(snr*4), isDig: true };
+                  const nI = I + generateNoise(snr*4);
+                  const nQ = Q + generateNoise(snr*4);
+                  return { msg: I, carrier: Q, out: s + generateNoise(snr), i: nI, q: nQ, isDig: true,
+                           checkError: () => {
+                               // Simplified range check for 64QAM center
+                               return Math.abs(nI - I) > 1 || Math.abs(nQ - Q) > 1; 
+                           }};
               }},
 
             // --- 8. SPREAD / MULTICARRIER ---
@@ -434,7 +426,10 @@
                   const chip = Math.sin(TWO_PI * p.chipRate * t) > 0 ? 1 : -1;
                   const spread = data * chip;
                   const s = spread * Math.cos(TWO_PI * p.fc * t);
-                  return { msg: data, carrier: chip, out: s + generateNoise(snr), i: spread, q: 0, isDig: true };
+                  // DSSS demod is correlation. Here we sim decision.
+                  const noisyDec = data + generateNoise(snr*2);
+                  return { msg: data, carrier: chip, out: s + generateNoise(snr), i: spread, q: 0, isDig: true,
+                           checkError: () => (noisyDec > 0 ? 1 : -1) !== data };
               }},
              { category: "Spread/OFDM", id: "FHSS", name: "FHSS (Freq Hopping)", 
               params: { fc: 10, rate: 2, hopRate: 0.5 }, 
@@ -444,7 +439,9 @@
                   const freqOffsets = [0, 5, -3, 8];
                   const currentFc = p.fc + freqOffsets[hopIdx];
                   const s = data * Math.cos(TWO_PI * currentFc * t);
-                  return { msg: data, carrier: currentFc/10, out: s + generateNoise(snr), i: data, q: 0, isDig: true };
+                  const noisyDec = data + generateNoise(snr*2);
+                  return { msg: data, carrier: currentFc/10, out: s + generateNoise(snr), i: data, q: 0, isDig: true,
+                           checkError: () => (noisyDec > 0 ? 1 : -1) !== data };
               }},
             { category: "Spread/OFDM", id: "OFDM", name: "OFDM (4-Subcarrier)", 
               params: { fc: 10, rate: 1 }, 
@@ -461,7 +458,9 @@
                       if (k===0) iTotal = b; 
                   }
                   s = s / subcarriers;
-                  return { msg: (symTime%2), carrier: Math.cos(TWO_PI*p.fc*t), out: s + generateNoise(snr), i: iTotal + generateNoise(snr), q: generateNoise(snr), isDig: true };
+                  const noisyDec = iTotal + generateNoise(snr*2);
+                  return { msg: (symTime%2), carrier: Math.cos(TWO_PI*p.fc*t), out: s + generateNoise(snr), i: iTotal + generateNoise(snr), q: generateNoise(snr), isDig: true,
+                           checkError: () => (noisyDec > 0 ? 1 : -1) !== iTotal };
               }},
 
             // --- 9. SPECIALIZED ---
@@ -486,10 +485,9 @@
         ];
 
         // --- SCOPE VISUALIZER COMPONENT ---
-        const Scope = ({ data, color, label, height = 100, id }) => {
+        const Scope = ({ data, color, label, height = 80, id }) => {
             const canvasRef = useRef(null);
             
-            // Allow download of this specific scope's view
             const downloadImage = () => {
                 const link = document.createElement('a');
                 link.download = `modulab_scope_${id}.png`;
@@ -523,7 +521,6 @@
                 ctx.beginPath();
                 for(let i=0; i<data.length; i++) {
                     const x = (i / data.length) * w;
-                    // Auto-scale or clip? Clipping for now to keep relative amp visible
                     const val = Math.max(-1.5, Math.min(1.5, data[i]));
                     const y = (h/2) - (val * (h * 0.35)); 
                     if(i===0) ctx.moveTo(x, y);
@@ -557,6 +554,10 @@
             const [isRunning, setIsRunning] = useState(true);
             const [timeScale, setTimeScale] = useState(1); // Zoom factor
             
+            // Input Config State
+            const [useCustomBits, setUseCustomBits] = useState(false);
+            const [customBitString, setCustomBitString] = useState("10110010");
+            
             // BER State
             const [berStats, setBerStats] = useState({ total: 0, errors: 0 });
             
@@ -570,15 +571,24 @@
             const [constPoints, setConstPoints] = useState([]);
             const [spectrum, setSpectrum] = useState([]);
 
-            const bits = useMemo(() => Array.from({length: 1024}, () => Math.round(Math.random())), []);
             const scheme = useMemo(() => SCHEMES.find(s => s.id === activeId) || SCHEMES[0], [activeId]);
+
+            // Memoized Bitstream
+            const bits = useMemo(() => {
+                if (useCustomBits && customBitString.length > 0) {
+                    // Parse string to number array, fallback to 0 if invalid char
+                    return customBitString.split('').map(c => (c === '1' ? 1 : 0));
+                }
+                // Random default
+                return Array.from({length: 1024}, () => Math.round(Math.random()));
+            }, [useCustomBits, customBitString]);
 
             // Reset logic on scheme change
             useEffect(() => {
                 setParams(scheme.params);
                 timeRef.current = 0;
                 setBerStats({ total: 0, errors: 0 });
-            }, [scheme]);
+            }, [scheme, bits]); // Reset BER if bits change
 
             // Animation Loop
             useEffect(() => {
@@ -622,8 +632,6 @@
                     // Update BER stats (accumulate)
                     if (scheme.isDig) {
                         setBerStats(prev => {
-                           // Keep running average but prevent overflow by resetting occasionally or decay?
-                           // Simple accumulation for this session:
                            const newTotal = prev.total + loopTotal;
                            const newErrors = prev.errors + loopErrors;
                            // Reset if too large to keep numbers snappy
@@ -637,7 +645,7 @@
                 };
                 reqRef.current = requestAnimationFrame(loop);
                 return () => cancelAnimationFrame(reqRef.current);
-            }, [activeId, params, snr, isRunning, scheme, timeScale]);
+            }, [activeId, params, snr, isRunning, scheme, timeScale, bits]);
 
             // Export Data as CSV
             const exportCSV = () => {
@@ -685,6 +693,37 @@
                                 <Radio size={20} className="text-blue-400" /> ModuLab
                             </h1>
                             <p className="text-xs text-slate-500 mt-1">Comm Systems Visualizer</p>
+                        </div>
+
+                        {/* INPUT CONFIG PANEL */}
+                        <div className="p-4 border-b border-slate-800 bg-slate-900/50">
+                            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-2"><Edit size={12}/> Input Configuration</h3>
+                            <div className="flex items-center gap-2 mb-2">
+                                <button 
+                                    onClick={() => setUseCustomBits(false)}
+                                    className={`flex-1 text-xs py-1 rounded border ${!useCustomBits ? 'bg-blue-600 border-blue-500 text-white' : 'border-slate-700 text-slate-400'}`}
+                                >
+                                    Random
+                                </button>
+                                <button 
+                                    onClick={() => setUseCustomBits(true)}
+                                    className={`flex-1 text-xs py-1 rounded border ${useCustomBits ? 'bg-blue-600 border-blue-500 text-white' : 'border-slate-700 text-slate-400'}`}
+                                >
+                                    Custom
+                                </button>
+                            </div>
+                            {useCustomBits && (
+                                <div>
+                                    <input 
+                                        type="text" 
+                                        value={customBitString}
+                                        onChange={(e) => setCustomBitString(e.target.value.replace(/[^01]/g, ''))}
+                                        placeholder="e.g. 1011001"
+                                        className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs font-mono text-cyan-400 focus:outline-none focus:border-cyan-500"
+                                    />
+                                    <p className="text-[10px] text-slate-600 mt-1">Only 0s and 1s accepted</p>
+                                </div>
+                            )}
                         </div>
                         
                         <div className="flex-1 overflow-y-auto p-2 space-y-4">
