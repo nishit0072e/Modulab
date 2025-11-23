@@ -12,6 +12,10 @@ Unlike static diagrams, ModuLab generates signals in real-time using Digital Sig
 2.  Double-click it to open it in any modern web browser (Chrome, Firefox, Edge, Safari).
 3.  Start exploring!
 
+## Live Demo
+
+[To View click here](https://nishit0072e.github.io/Modulab/)
+
 ## ✨ Key Features
 
 * **Real-Time Signal Generation:** Waveforms are calculated mathematically on the fly, not pre-rendered videos.
