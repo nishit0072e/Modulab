@@ -102,5 +102,3 @@ ModuLab is open for experimentation! Since the logic is contained in simple Java
 2.  Add a new object with a unique `id`, `name`, and `gen` function.
 3.  The `gen` function receives time `t` and parameters `p` and returns the signal value.
 
-## 📄 License
-
