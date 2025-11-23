@@ -214,7 +214,7 @@
               }},
 
             // --- 4. PULSE / PCM ---
-            { category: "Pulse/PCM", id: "PCM", name: "Pulse Code Modulation (PCM)", 
+            { category: "Pulse/PCM", id: "PCM", name: "Pulse Code Modulation (PCM)", isDig: true,
               params: { fm: 1, fs: 10 }, 
               gen: (t, p, snr) => {
                   const m = Math.cos(TWO_PI * p.fm * t);
@@ -255,7 +255,7 @@
               }},
 
             // --- 5. FSK FAMILY ---
-            { category: "FSK Family", id: "BFSK", name: "Binary FSK (BFSK)", 
+            { category: "FSK Family", id: "BFSK", name: "Binary FSK (BFSK)", isDig: true,
               params: { fc: 15, dev: 5, rate: 2 }, 
               gen: (t, p, snr, bits) => {
                   const b = getBit(bits, t, p.rate);
@@ -268,7 +268,7 @@
                   return { msg: b, carrier: c1*0.5 + c2*0.5, out: s + generateNoise(snr), i: b?1:-1, q: b?1:-1, isDig: true,
                            checkError: () => (noisyDecision > 0 ? 1 : 0) !== b };
               }},
-            { category: "FSK Family", id: "MFSK", name: "M-ary FSK (MFSK)", 
+            { category: "FSK Family", id: "MFSK", name: "M-ary FSK (MFSK)", isDig: true, 
               params: { fc: 10, rate: 1.5, m: 4, spacing: 5 }, 
               gen: (t, p, snr, bits) => {
                   const sym = getSymbol(bits, t, p.rate, p.m); 
@@ -278,7 +278,7 @@
                   return { msg: sym, carrier: Math.cos(TWO_PI * freq * t), out: s + generateNoise(snr), i: 0, q: 0, isDig: true,
                            checkError: () => Math.max(0, Math.min(p.m-1, noisySym)) !== sym };
               }},
-            { category: "FSK Family", id: "MSK", name: "Minimum Shift Keying (MSK)", 
+            { category: "FSK Family", id: "MSK", name: "Minimum Shift Keying (MSK)", isDig: true,
               params: { fc: 10, rate: 2 }, 
               gen: (t, p, snr, bits) => {
                   const b = getBit(bits, t, p.rate);
@@ -288,7 +288,7 @@
                   return { msg: b, carrier: b?1:-1, out: s + generateNoise(snr), i: Math.cos(PI*t*p.rate/2), q: Math.sin(PI*t*p.rate/2), isDig: true,
                            checkError: () => (noisyDecision > 0 ? 1 : 0) !== b };
               }},
-            { category: "FSK Family", id: "GMSK", name: "Gaussian MSK (GMSK)", 
+            { category: "FSK Family", id: "GMSK", name: "Gaussian MSK (GMSK)", isDig: true,
               params: { fc: 10, rate: 2 }, 
               gen: (t, p, snr, bits) => {
                   const b = getBit(bits, t, p.rate);
@@ -302,7 +302,7 @@
               }},
 
             // --- 6. PSK FAMILY ---
-            { category: "PSK Family", id: "BPSK", name: "Binary PSK (BPSK)", 
+            { category: "PSK Family", id: "BPSK", name: "Binary PSK (BPSK)", isDig: true,
               params: { fc: 15, rate: 2 }, 
               gen: (t, p, snr, bits) => {
                   const b = getBit(bits, t, p.rate);
@@ -312,7 +312,7 @@
                   return { msg: b, carrier: Math.cos(TWO_PI*p.fc*t), out: s + generateNoise(snr), i: noisyI, q: generateNoise(snr*2), isDig: true,
                            checkError: () => (noisyI > 0 ? 1 : 0) !== b };
               }},
-            { category: "PSK Family", id: "DPSK", name: "Differential PSK (DPSK)", 
+            { category: "PSK Family", id: "DPSK", name: "Differential PSK (DPSK)", isDig: true,
               params: { fc: 15, rate: 2 }, 
               gen: (t, p, snr, bits) => {
                   const diffBit = getDiffBit(bits, t, p.rate); 
@@ -322,7 +322,7 @@
                   return { msg: getBit(bits, t, p.rate), carrier: diffBit, out: s + generateNoise(snr), i: diffBit?1:-1, q: 0, isDig: true,
                            checkError: () => (noisyDiff > 0 ? 1 : 0) !== diffBit };
               }},
-            { category: "PSK Family", id: "QPSK", name: "Quadrature PSK (QPSK)", 
+            { category: "PSK Family", id: "QPSK", name: "Quadrature PSK (QPSK)", isDig: true,
               params: { fc: 10, rate: 2 }, 
               gen: (t, p, snr, bits) => {
                   const idx = Math.floor(t * p.rate) * 2;
@@ -334,7 +334,7 @@
                   return { msg: b1, carrier: b2, out: s + generateNoise(snr), i: noisyI, q: noisyQ, isDig: true,
                            checkError: () => (noisyI > 0 ? 1 : -1) !== b1 || (noisyQ > 0 ? 1 : -1) !== b2 };
               }},
-            { category: "PSK Family", id: "OQPSK", name: "Offset QPSK (OQPSK)", 
+            { category: "PSK Family", id: "OQPSK", name: "Offset QPSK (OQPSK)", isDig: true,
               params: { fc: 10, rate: 2 }, 
               gen: (t, p, snr, bits) => {
                   const idx = Math.floor(t * p.rate) * 2;
@@ -347,7 +347,7 @@
                   return { msg: b1, carrier: b2, out: s + generateNoise(snr), i: noisyI, q: noisyQ, isDig: true,
                             checkError: () => (noisyI > 0 ? 1 : -1) !== b1 || (noisyQ > 0 ? 1 : -1) !== b2 };
               }},
-            { category: "PSK Family", id: "MPSK", name: "M-ary PSK (8-PSK)", 
+            { category: "PSK Family", id: "MPSK", name: "M-ary PSK (8-PSK)", isDig: true,
               params: { fc: 12, rate: 1.5, m: 8 }, 
               gen: (t, p, snr, bits) => {
                   const sym = getSymbol(bits, t, p.rate, p.m);
@@ -364,7 +364,7 @@
               }},
 
             // --- 7. ASK/QAM FAMILY ---
-            { category: "Amplitude/QAM", id: "ASK", name: "Binary ASK", 
+            { category: "Amplitude/QAM", id: "ASK", name: "Binary ASK", isDig: true,
               params: { fc: 20, rate: 4 }, 
               gen: (t, p, snr, bits) => {
                   const b = getBit(bits, t, p.rate);
@@ -373,7 +373,7 @@
                   return { msg: b, carrier: Math.cos(TWO_PI*p.fc*t), out: s + generateNoise(snr), i: noisyVal, q: 0, isDig: true,
                            checkError: () => (noisyVal > 0.5 ? 1 : 0) !== b };
               }},
-            { category: "Amplitude/QAM", id: "MASK", name: "M-ary ASK (4-ASK)", 
+            { category: "Amplitude/QAM", id: "MASK", name: "M-ary ASK (4-ASK)", isDig: true,
               params: { fc: 15, rate: 2, m: 4 }, 
               gen: (t, p, snr, bits) => {
                   const sym = getSymbol(bits, t, p.rate, p.m); // 0, 1, 2, 3
@@ -385,7 +385,7 @@
                   return { msg: sym, carrier: level, out: s + generateNoise(snr), i: level/3, q: 0, isDig: true,
                            checkError: () => dec(noisyLvl) !== level };
               }},
-            { category: "Amplitude/QAM", id: "16QAM", name: "16-QAM", 
+            { category: "Amplitude/QAM", id: "16QAM", name: "16-QAM", isDig: true,
               params: { fc: 10, rate: 2 }, 
               gen: (t, p, snr, bits) => {
                   const idx = Math.floor(t * p.rate) * 4;
@@ -401,7 +401,7 @@
                                return dec(nI) !== I || dec(nQ) !== Q;
                            }};
               }},
-            { category: "Amplitude/QAM", id: "64QAM", name: "64-QAM", 
+            { category: "Amplitude/QAM", id: "64QAM", name: "64-QAM", isDig: true,
               params: { fc: 10, rate: 1.5 }, 
               gen: (t, p, snr, bits) => {
                   const idx = Math.floor(t * p.rate) * 6;
@@ -419,7 +419,7 @@
               }},
 
             // --- 8. SPREAD / MULTICARRIER ---
-            { category: "Spread/OFDM", id: "DSSS", name: "DSSS (Direct Sequence)", 
+            { category: "Spread/OFDM", id: "DSSS", name: "DSSS (Direct Sequence)", isDig: true,
               params: { fc: 15, rate: 1, chipRate: 10 }, 
               gen: (t, p, snr, bits) => {
                   const data = getBit(bits, t, p.rate) ? 1 : -1;
@@ -431,7 +431,7 @@
                   return { msg: data, carrier: chip, out: s + generateNoise(snr), i: spread, q: 0, isDig: true,
                            checkError: () => (noisyDec > 0 ? 1 : -1) !== data };
               }},
-             { category: "Spread/OFDM", id: "FHSS", name: "FHSS (Freq Hopping)", 
+             { category: "Spread/OFDM", id: "FHSS", name: "FHSS (Freq Hopping)", isDig: true,
               params: { fc: 10, rate: 2, hopRate: 0.5 }, 
               gen: (t, p, snr, bits) => {
                   const data = getBit(bits, t, p.rate) ? 1 : -1;
@@ -443,7 +443,7 @@
                   return { msg: data, carrier: currentFc/10, out: s + generateNoise(snr), i: data, q: 0, isDig: true,
                            checkError: () => (noisyDec > 0 ? 1 : -1) !== data };
               }},
-            { category: "Spread/OFDM", id: "OFDM", name: "OFDM (4-Subcarrier)", 
+            { category: "Spread/OFDM", id: "OFDM", name: "OFDM (4-Subcarrier)", isDig: true,
               params: { fc: 10, rate: 1 }, 
               gen: (t, p, snr, bits) => {
                   let s = 0;
@@ -464,7 +464,7 @@
               }},
 
             // --- 9. SPECIALIZED ---
-             { category: "Specialized", id: "Polar", name: "Polar Modulation", 
+             { category: "Specialized", id: "Polar", name: "Polar Modulation", isDig: true,
               params: { fc: 15, rate: 2 }, 
               gen: (t, p, snr, bits) => {
                   const idx = Math.floor(t * p.rate);
@@ -473,7 +473,7 @@
                   const s = amp * Math.cos(TWO_PI * p.fc * t + phase);
                   return { msg: amp, carrier: phase, out: s + generateNoise(snr), i: amp*Math.cos(phase), q: amp*Math.sin(phase), isDig: true };
               }},
-             { category: "Specialized", id: "OTFS", name: "OTFS (Delay-Doppler)", 
+             { category: "Specialized", id: "OTFS", name: "OTFS (Delay-Doppler)", isDig: true,
               params: { fc: 12, rate: 1 }, 
               gen: (t, p, snr, bits) => {
                   const gridX = (t * 5) % 4; 
@@ -616,8 +616,8 @@
                         // Constellation
                         if (i % 5 === 0) cP.push({ i: res.i, q: res.q });
 
-                        // BER Calculation (Sample center check approximation)
-                        if (scheme.isDig && scheme.checkError && i % 20 === 0) {
+                        // BER Calculation
+                        if (scheme.isDig && res.checkError && i % 20 === 0) { // Fixed: check res.checkError instead of scheme.checkError
                             loopTotal++;
                             if (res.checkError()) loopErrors++;
                         }
